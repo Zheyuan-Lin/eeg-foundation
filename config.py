@@ -47,6 +47,11 @@ def get_config():
         'num_epochs': 10,
         'device': 'cuda',
 
+        # Learning rate scheduler
+        'use_scheduler': True,         # Enable/disable LR scheduler
+        'warmup_ratio': 0.1,           # Warmup as fraction of total steps
+        'min_lr': 1e-6,                # Minimum LR for cosine annealing
+
         # Logging
         'log_dir': './logs',
         'save_every': 1000,        # Save checkpoint every N steps

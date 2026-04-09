@@ -35,6 +35,21 @@ class Trainer:
             lr=config['learning_rate']
         )
 
+        # Setup learning rate scheduler
+        self.scheduler = None
+        if config.get('use_scheduler', False):
+            total_steps = len(train_loader) * config['num_epochs']
+            warmup_steps = int(total_steps * config.get('warmup_ratio', 0.1))
+
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer,
+                T_max=total_steps - warmup_steps,
+                eta_min=config.get('min_lr', 1e-6)
+            )
+            self.warmup_steps = warmup_steps
+            self.total_steps = total_steps
+            self.current_step = 0
+
         # Setup logging
         os.makedirs(config['log_dir'], exist_ok=True)
 
@@ -87,9 +102,23 @@ class Trainer:
             loss.backward()
             self.optimizer.step()
 
+            # Update learning rate
+            if self.scheduler is not None:
+                self.current_step += 1
+
+                # Warmup phase: linear increase
+                if self.current_step <= self.warmup_steps:
+                    warmup_lr = self.config['learning_rate'] * (self.current_step / self.warmup_steps)
+                    for param_group in self.optimizer.param_groups:
+                        param_group['lr'] = warmup_lr
+                else:
+                    # Cosine annealing phase
+                    self.scheduler.step()
+
             # Logging
             total_loss += loss.item()
-            pbar.set_postfix({'loss': loss.item()})
+            current_lr = self.optimizer.param_groups[0]['lr']
+            pbar.set_postfix({'loss': loss.item(), 'lr': f'{current_lr:.2e}'})
 
             global_step += 1
 
