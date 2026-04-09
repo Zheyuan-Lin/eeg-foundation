@@ -10,6 +10,7 @@ def get_config():
         'data_path': './data',
         'num_channels': 20,
         'sampling_rate': 250,
+        'normalization': 'minmax',  # Options: 'minmax', 'zscore', 'none'
 
         # Chunking
         'chunk_len': 500,          # Samples per chunk

@@ -28,13 +28,15 @@ class EEGDataset(Dataset):
         chunk_len=500,
         num_chunks=34,
         chunk_overlap=100,
-        num_channels=20
+        num_channels=20,
+        normalization='minmax'  # Options: 'minmax', 'zscore', 'none'
     ):
         self.data_path = data_path
         self.chunk_len = chunk_len
         self.num_chunks = num_chunks
         self.chunk_overlap = chunk_overlap
         self.num_channels = num_channels
+        self.normalization = normalization
 
         # Get list of .pt files
         self.files = [
@@ -68,6 +70,10 @@ class EEGDataset(Dataset):
             total_samples = eeg_data.shape[0]
             time_samples = total_samples // self.num_channels
             eeg_data = eeg_data.reshape(self.num_channels, time_samples)
+
+        # Apply normalization
+        if self.normalization != 'none':
+            eeg_data = self._normalize(eeg_data)
 
         # Create overlapping chunks
         chunks, attention_mask = self._create_chunks(eeg_data)
@@ -122,6 +128,38 @@ class EEGDataset(Dataset):
 
         return chunks, attention_mask
 
+    def _normalize(self, eeg_data):
+        """
+        Normalize EEG data per channel.
+
+        Args:
+            eeg_data: (num_channels, time_samples)
+
+        Returns:
+            Normalized EEG data with same shape
+        """
+        if self.normalization == 'minmax':
+            # Scale to [-1, 1] per channel
+            min_val = eeg_data.min(dim=-1, keepdim=True)[0]
+            max_val = eeg_data.max(dim=-1, keepdim=True)[0]
+            # Avoid division by zero
+            range_val = max_val - min_val
+            range_val = torch.where(range_val == 0, torch.ones_like(range_val), range_val)
+            normalized = 2 * (eeg_data - min_val) / range_val - 1
+            return normalized
+
+        elif self.normalization == 'zscore':
+            # Z-score normalization per channel
+            mean = eeg_data.mean(dim=-1, keepdim=True)
+            std = eeg_data.std(dim=-1, keepdim=True)
+            # Avoid division by zero
+            std = torch.where(std == 0, torch.ones_like(std), std)
+            normalized = (eeg_data - mean) / std
+            return normalized
+
+        else:
+            return eeg_data
+
 
 def create_dataloaders(config, train_split=0.8):
     """
@@ -142,7 +180,8 @@ def create_dataloaders(config, train_split=0.8):
         chunk_len=config['chunk_len'],
         num_chunks=config['num_chunks'],
         chunk_overlap=config['chunk_overlap'],
-        num_channels=config['num_channels']
+        num_channels=config['num_channels'],
+        normalization=config.get('normalization', 'minmax')
     )
 
     # Split into train/val
