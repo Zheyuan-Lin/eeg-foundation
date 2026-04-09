@@ -12,6 +12,13 @@ def get_config():
         'sampling_rate': 250,
         'normalization': 'minmax',  # Options: 'minmax', 'zscore', 'none'
 
+        # Data augmentation (applied to training data only)
+        'augmentation': False,            # Enable/disable augmentation
+        'aug_prob': 0.5,                  # Probability of applying augmentation per sample
+        'aug_noise_std': 0.1,             # Gaussian noise standard deviation
+        'aug_dropout_prob': 0.1,          # Probability of dropping each channel
+        'aug_scale_range': (0.9, 1.1),    # Amplitude scaling range
+
         # Chunking
         'chunk_len': 500,          # Samples per chunk
         'num_chunks': 34,          # Number of chunks per sequence

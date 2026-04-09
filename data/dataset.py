@@ -29,7 +29,12 @@ class EEGDataset(Dataset):
         num_chunks=34,
         chunk_overlap=100,
         num_channels=20,
-        normalization='minmax'  # Options: 'minmax', 'zscore', 'none'
+        normalization='minmax',  # Options: 'minmax', 'zscore', 'none'
+        augmentation=False,      # Enable/disable augmentation
+        aug_prob=0.5,            # Probability of applying augmentation
+        aug_noise_std=0.1,       # Gaussian noise std
+        aug_dropout_prob=0.1,    # Channel dropout probability
+        aug_scale_range=(0.9, 1.1)  # Amplitude scaling range
     ):
         self.data_path = data_path
         self.chunk_len = chunk_len
@@ -37,6 +42,13 @@ class EEGDataset(Dataset):
         self.chunk_overlap = chunk_overlap
         self.num_channels = num_channels
         self.normalization = normalization
+
+        # Augmentation settings
+        self.augmentation = augmentation
+        self.aug_prob = aug_prob
+        self.aug_noise_std = aug_noise_std
+        self.aug_dropout_prob = aug_dropout_prob
+        self.aug_scale_range = aug_scale_range
 
         # Get list of .pt files
         self.files = [
@@ -74,6 +86,10 @@ class EEGDataset(Dataset):
         # Apply normalization
         if self.normalization != 'none':
             eeg_data = self._normalize(eeg_data)
+
+        # Apply augmentation (if enabled and with probability)
+        if self.augmentation and torch.rand(1).item() < self.aug_prob:
+            eeg_data = self._augment(eeg_data)
 
         # Create overlapping chunks
         chunks, attention_mask = self._create_chunks(eeg_data)
@@ -160,6 +176,43 @@ class EEGDataset(Dataset):
         else:
             return eeg_data
 
+    def _augment(self, eeg_data):
+        """
+        Apply data augmentation to EEG data.
+
+        Args:
+            eeg_data: (num_channels, time_samples)
+
+        Returns:
+            Augmented EEG data with same shape
+        """
+        augmented = eeg_data.clone()
+
+        # 1. Gaussian noise injection
+        if torch.rand(1).item() < 0.5:
+            noise = torch.randn_like(augmented) * self.aug_noise_std
+            augmented = augmented + noise
+
+        # 2. Channel dropout (randomly zero out some channels)
+        if torch.rand(1).item() < 0.5:
+            num_channels = augmented.shape[0]
+            dropout_mask = torch.rand(num_channels) > self.aug_dropout_prob
+            augmented = augmented * dropout_mask.unsqueeze(-1)
+
+        # 3. Amplitude scaling
+        if torch.rand(1).item() < 0.5:
+            scale = torch.FloatTensor(1).uniform_(*self.aug_scale_range).item()
+            augmented = augmented * scale
+
+        # 4. Time jittering (small temporal shifts)
+        if torch.rand(1).item() < 0.5:
+            max_shift = min(50, eeg_data.shape[1] // 20)  # Max 5% shift
+            shift = torch.randint(-max_shift, max_shift + 1, (1,)).item()
+            if shift != 0:
+                augmented = torch.roll(augmented, shifts=shift, dims=1)
+
+        return augmented
+
 
 def create_dataloaders(config, train_split=0.8):
     """
@@ -174,20 +227,47 @@ def create_dataloaders(config, train_split=0.8):
     """
     from torch.utils.data import DataLoader, random_split
 
-    # Create dataset
-    dataset = EEGDataset(
+    # Create training dataset (with augmentation)
+    train_dataset_full = EEGDataset(
         data_path=config['data_path'],
         chunk_len=config['chunk_len'],
         num_chunks=config['num_chunks'],
         chunk_overlap=config['chunk_overlap'],
         num_channels=config['num_channels'],
-        normalization=config.get('normalization', 'minmax')
+        normalization=config.get('normalization', 'minmax'),
+        augmentation=config.get('augmentation', False),
+        aug_prob=config.get('aug_prob', 0.5),
+        aug_noise_std=config.get('aug_noise_std', 0.1),
+        aug_dropout_prob=config.get('aug_dropout_prob', 0.1),
+        aug_scale_range=config.get('aug_scale_range', (0.9, 1.1))
     )
 
-    # Split into train/val
-    train_size = int(len(dataset) * train_split)
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+    # Create validation dataset (NO augmentation)
+    val_dataset_full = EEGDataset(
+        data_path=config['data_path'],
+        chunk_len=config['chunk_len'],
+        num_chunks=config['num_chunks'],
+        chunk_overlap=config['chunk_overlap'],
+        num_channels=config['num_channels'],
+        normalization=config.get('normalization', 'minmax'),
+        augmentation=False  # Never augment validation data
+    )
+
+    # Get total dataset size
+    total_size = len(train_dataset_full)
+
+    # Create indices for split
+    train_size = int(total_size * train_split)
+    val_size = total_size - train_size
+
+    indices = torch.randperm(total_size).tolist()
+    train_indices = indices[:train_size]
+    val_indices = indices[train_size:]
+
+    # Create subsets
+    from torch.utils.data import Subset
+    train_dataset = Subset(train_dataset_full, train_indices)
+    val_dataset = Subset(val_dataset_full, val_indices)
 
     # Create dataloaders
     train_loader = DataLoader(
