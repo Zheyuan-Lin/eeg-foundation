@@ -52,6 +52,10 @@ def get_config():
         'warmup_ratio': 0.1,           # Warmup as fraction of total steps
         'min_lr': 1e-6,                # Minimum LR for cosine annealing
 
+        # Gradient clipping
+        'clip_grad_norm': 1.0,         # Max gradient norm (None to disable)
+        'log_grad_norm': False,        # Log gradient norms during training
+
         # Logging
         'log_dir': './logs',
         'save_every': 1000,        # Save checkpoint every N steps

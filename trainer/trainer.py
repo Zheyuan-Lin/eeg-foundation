@@ -100,6 +100,20 @@ class Trainer:
             # Backward pass
             self.optimizer.zero_grad()
             loss.backward()
+
+            # Gradient clipping
+            if self.config.get('clip_grad_norm', None):
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.config['clip_grad_norm']
+                )
+            else:
+                # Compute gradient norm for logging even without clipping
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    float('inf')
+                )
+
             self.optimizer.step()
 
             # Update learning rate
@@ -118,7 +132,13 @@ class Trainer:
             # Logging
             total_loss += loss.item()
             current_lr = self.optimizer.param_groups[0]['lr']
-            pbar.set_postfix({'loss': loss.item(), 'lr': f'{current_lr:.2e}'})
+            log_dict = {'loss': loss.item(), 'lr': f'{current_lr:.2e}'}
+
+            # Log gradient norm
+            if self.config.get('log_grad_norm', False):
+                log_dict['grad_norm'] = f'{grad_norm:.2f}'
+
+            pbar.set_postfix(log_dict)
 
             global_step += 1
 
