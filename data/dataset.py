@@ -6,6 +6,15 @@ Loads preprocessed .pt files and creates chunks.
 import torch
 from torch.utils.data import Dataset
 import os
+import warnings
+
+# MNE for .edf and .fif support
+try:
+    import mne
+    MNE_AVAILABLE = True
+except ImportError:
+    MNE_AVAILABLE = False
+    warnings.warn("MNE not installed. .edf and .fif formats will not be supported.")
 
 
 class EEGDataset(Dataset):
@@ -50,14 +59,19 @@ class EEGDataset(Dataset):
         self.aug_dropout_prob = aug_dropout_prob
         self.aug_scale_range = aug_scale_range
 
-        # Get list of .pt files
+        # Get list of supported files
+        supported_extensions = ['.pt']
+        if MNE_AVAILABLE:
+            supported_extensions.extend(['.edf', '.fif'])
+
         self.files = [
             f for f in os.listdir(data_path)
-            if f.endswith('.pt')
+            if any(f.endswith(ext) for ext in supported_extensions)
         ]
 
         if len(self.files) == 0:
-            raise ValueError(f'No .pt files found in {data_path}')
+            raise ValueError(f'No supported files found in {data_path}. '
+                           f'Supported formats: {supported_extensions}')
 
         print(f'Found {len(self.files)} EEG files')
 
@@ -72,9 +86,9 @@ class EEGDataset(Dataset):
             chunks: (num_chunks, num_channels, chunk_len)
             attention_mask: (num_chunks,) - 1 for real chunks, 0 for padding
         """
-        # Load .pt file
+        # Load file based on extension
         file_path = os.path.join(self.data_path, self.files[idx])
-        eeg_data = torch.load(file_path)  # (num_channels, time_samples)
+        eeg_data = self._load_file(file_path)
 
         # Ensure correct shape
         if eeg_data.dim() == 1:
@@ -143,6 +157,41 @@ class EEGDataset(Dataset):
             attention_mask[last_valid:] = 0
 
         return chunks, attention_mask
+
+    def _load_file(self, file_path):
+        """
+        Load EEG file based on extension.
+
+        Args:
+            file_path: Path to EEG file
+
+        Returns:
+            eeg_data: (num_channels, time_samples) tensor
+        """
+        if file_path.endswith('.pt'):
+            # PyTorch tensor
+            return torch.load(file_path)
+
+        elif file_path.endswith('.edf'):
+            # EDF format via MNE
+            if not MNE_AVAILABLE:
+                raise ImportError("MNE is required to load .edf files. Install with: pip install mne")
+
+            raw = mne.io.read_raw_edf(file_path, preload=True, verbose=False)
+            data = raw.get_data()  # (channels, samples)
+            return torch.from_numpy(data).float()
+
+        elif file_path.endswith('.fif'):
+            # FIF format via MNE
+            if not MNE_AVAILABLE:
+                raise ImportError("MNE is required to load .fif files. Install with: pip install mne")
+
+            raw = mne.io.read_raw_fif(file_path, preload=True, verbose=False)
+            data = raw.get_data()  # (channels, samples)
+            return torch.from_numpy(data).float()
+
+        else:
+            raise ValueError(f"Unsupported file format: {file_path}")
 
     def _normalize(self, eeg_data):
         """
