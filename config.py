@@ -60,6 +60,9 @@ def get_config():
         'log_dir': './logs',
         'save_every': 1000,        # Save checkpoint every N steps
         'log_every': 100,          # Log every N steps
+
+        # Checkpointing
+        'max_checkpoints': 3,      # Keep only best N checkpoints
     }
 
 

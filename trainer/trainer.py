@@ -61,6 +61,8 @@ class Trainer:
         print(f'\nStarting training for {self.config["num_epochs"]} epochs...\n')
 
         global_step = 0
+        best_val_loss = float('inf')
+        best_epoch = 0
 
         for epoch in range(self.config['num_epochs']):
             # Training
@@ -72,17 +74,49 @@ class Trainer:
             print(f'Epoch {epoch+1}/{self.config["num_epochs"]} - '
                   f'Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}')
 
-            # Save checkpoint
+            # Save checkpoint with full state
             checkpoint_path = os.path.join(
                 self.config['log_dir'],
                 f'checkpoint_epoch_{epoch+1}.pt'
             )
-            self.model.save_checkpoint(checkpoint_path)
+            self.model.save_checkpoint(
+                checkpoint_path,
+                epoch=epoch+1,
+                optimizer=self.optimizer,
+                scheduler=self.scheduler,
+                train_loss=train_loss,
+                val_loss=val_loss
+            )
+
+            # Save best model
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_epoch = epoch + 1
+                best_path = os.path.join(self.config['log_dir'], 'best_model.pt')
+                self.model.save_checkpoint(
+                    best_path,
+                    epoch=epoch+1,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
+                    train_loss=train_loss,
+                    val_loss=val_loss
+                )
+                print(f'  → Saved new best model (val_loss: {val_loss:.4f})')
+
+            # Keep only best N checkpoints
+            self._cleanup_checkpoints()
 
         # Save final model
         final_path = os.path.join(self.config['log_dir'], 'model_final.pt')
-        self.model.save_checkpoint(final_path)
-        print(f'\nTraining complete! Final model saved to {final_path}')
+        self.model.save_checkpoint(
+            final_path,
+            epoch=self.config['num_epochs'],
+            optimizer=self.optimizer,
+            scheduler=self.scheduler
+        )
+        print(f'\nTraining complete!')
+        print(f'Best model at epoch {best_epoch} with val_loss: {best_val_loss:.4f}')
+        print(f'Final model saved to {final_path}')
 
     def _train_epoch(self, epoch, global_step):
         """Train for one epoch."""
@@ -161,3 +195,23 @@ class Trainer:
                 total_loss += loss.item()
 
         return total_loss / len(self.val_loader) if len(self.val_loader) > 0 else 0
+
+    def _cleanup_checkpoints(self):
+        """Keep only the best N checkpoints to save disk space."""
+        max_checkpoints = self.config.get('max_checkpoints', 3)
+
+        # Get all checkpoint files (excluding best_model and model_final)
+        checkpoints = [
+            f for f in os.listdir(self.config['log_dir'])
+            if f.startswith('checkpoint_epoch_') and f.endswith('.pt')
+        ]
+
+        if len(checkpoints) > max_checkpoints:
+            # Sort by modification time (oldest first)
+            checkpoints.sort(key=lambda x: os.path.getmtime(
+                os.path.join(self.config['log_dir'], x)
+            ))
+
+            # Remove oldest checkpoints
+            for checkpoint in checkpoints[:-max_checkpoints]:
+                os.remove(os.path.join(self.config['log_dir'], checkpoint))

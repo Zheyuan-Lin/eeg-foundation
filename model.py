@@ -78,25 +78,68 @@ class FoundationModel(nn.Module):
 
         return loss
 
-    def save_checkpoint(self, path):
-        """Save model checkpoint."""
-        torch.save({
+    def save_checkpoint(self, path, epoch=None, optimizer=None, scheduler=None, **kwargs):
+        """
+        Save model checkpoint with full training state.
+
+        Args:
+            path: Path to save checkpoint
+            epoch: Current epoch number
+            optimizer: Optimizer state to save
+            scheduler: LR scheduler state to save
+            **kwargs: Additional items to save (e.g., metrics)
+        """
+        checkpoint = {
             'encoder': self.encoder.state_dict() if self.encoder else None,
             'embedder': self.embedder.state_dict(),
             'decoder': self.decoder.state_dict(),
-        }, path)
+        }
+
+        # Add training state
+        if epoch is not None:
+            checkpoint['epoch'] = epoch
+        if optimizer is not None:
+            checkpoint['optimizer'] = optimizer.state_dict()
+        if scheduler is not None:
+            checkpoint['scheduler'] = scheduler.state_dict()
+
+        # Add any additional data
+        checkpoint.update(kwargs)
+
+        torch.save(checkpoint, path)
         print(f'Saved checkpoint to {path}')
 
-    def load_checkpoint(self, path):
-        """Load model checkpoint."""
+    def load_checkpoint(self, path, optimizer=None, scheduler=None):
+        """
+        Load model checkpoint and optionally restore training state.
+
+        Args:
+            path: Path to checkpoint
+            optimizer: Optimizer to load state into
+            scheduler: Scheduler to load state into
+
+        Returns:
+            checkpoint dict with additional info (epoch, etc.)
+        """
         checkpoint = torch.load(path)
 
-        if self.encoder and checkpoint['encoder']:
+        # Load model weights
+        if self.encoder and checkpoint.get('encoder'):
             self.encoder.load_state_dict(checkpoint['encoder'])
         self.embedder.load_state_dict(checkpoint['embedder'])
         self.decoder.load_state_dict(checkpoint['decoder'])
 
+        # Load optimizer state
+        if optimizer and 'optimizer' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer'])
+
+        # Load scheduler state
+        if scheduler and 'scheduler' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler'])
+
         print(f'Loaded checkpoint from {path}')
+
+        return checkpoint
 
 
 def build_model(config):
