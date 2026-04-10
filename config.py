@@ -47,6 +47,11 @@ def get_config():
         'parcellation_dim': None,  # Computed from encoder output
         'pos_encoding_type': 'learned',  # Options: 'learned', 'sinusoidal', 'none'
 
+        # Masking strategies
+        'masking_strategy': 'span',  # Options: 'random', 'span', 'block'
+        'mask_ratio': 0.15,          # Fraction of positions to mask
+        'span_length': 3,            # Average span length for span masking
+
         # Decoder (Transformer)
         'num_layers': 4,           # Number of transformer layers
         'num_heads': 4,            # Attention heads

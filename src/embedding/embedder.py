@@ -28,12 +28,16 @@ class CSMEmbedder(nn.Module):
         pos_encoding_type: Type of positional encoding ('learned', 'sinusoidal', 'none')
     """
 
-    def __init__(self, in_dim, embed_dim, dropout=0.1, max_seq_len=512, pos_encoding_type='learned'):
+    def __init__(self, in_dim, embed_dim, dropout=0.1, max_seq_len=512, pos_encoding_type='learned',
+                 masking_strategy='span', mask_ratio=0.15, span_length=3):
         super().__init__()
 
         self.in_dim = in_dim
         self.embed_dim = embed_dim
         self.pos_encoding_type = pos_encoding_type
+        self.masking_strategy = masking_strategy
+        self.mask_ratio = mask_ratio
+        self.span_length = span_length
 
         # Projection layer
         self.projection = nn.Linear(in_dim, embed_dim)
@@ -86,18 +90,16 @@ class CSMEmbedder(nn.Module):
 
     def prepare_batch(self, inputs):
         """
-        Prepare batch for CSM training.
-
-        Randomly masks one chunk per sequence and creates causal attention mask.
+        Prepare batch for CSM training with advanced masking strategies.
 
         Args:
             inputs: (batch, num_chunks, in_dim)
 
         Returns:
             dict with:
-                - inputs: Inputs with one chunk replaced by mask_token
+                - inputs: Inputs with masked chunks replaced by mask_token
                 - attention_mask: Causal mask up to masked position
-                - mask_positions: Which positions were masked
+                - mask_positions: Which positions were masked (list of tensors)
                 - original_inputs: Original inputs (for loss computation)
         """
         batch_size, num_chunks, in_dim = inputs.shape
@@ -106,18 +108,28 @@ class CSMEmbedder(nn.Module):
         # Save original inputs for loss
         original_inputs = inputs.clone()
 
-        # Randomly select one position per sequence to mask
-        mask_positions = torch.randint(0, num_chunks, (batch_size,), device=device)
+        # Apply masking strategy
+        if self.masking_strategy == 'random':
+            mask_positions = self._random_masking(batch_size, num_chunks, device)
+        elif self.masking_strategy == 'span':
+            mask_positions = self._span_masking(batch_size, num_chunks, device)
+        elif self.masking_strategy == 'block':
+            mask_positions = self._block_masking(batch_size, num_chunks, device)
+        else:
+            # Default: single random position
+            mask_positions = [torch.randint(0, num_chunks, (1,), device=device) for _ in range(batch_size)]
 
         # Replace masked positions with mask token
         for i in range(batch_size):
-            inputs[i, mask_positions[i]] = self.mask_token
+            for pos in mask_positions[i]:
+                inputs[i, pos] = self.mask_token
 
-        # Create causal attention mask
-        # Only attend up to (and including) the masked position
+        # Create causal attention mask (attend up to max masked position)
         attention_mask = torch.zeros(batch_size, num_chunks, device=device)
         for i in range(batch_size):
-            attention_mask[i, :mask_positions[i] + 1] = 1
+            if len(mask_positions[i]) > 0:
+                max_pos = mask_positions[i].max().item()
+                attention_mask[i, :max_pos + 1] = 1
 
         return {
             'inputs': inputs,
@@ -125,6 +137,58 @@ class CSMEmbedder(nn.Module):
             'mask_positions': mask_positions,
             'original_inputs': original_inputs
         }
+
+    def _random_masking(self, batch_size, num_chunks, device):
+        """Random masking: mask random individual positions."""
+        mask_positions = []
+        num_mask = max(1, int(num_chunks * self.mask_ratio))
+
+        for _ in range(batch_size):
+            positions = torch.randperm(num_chunks, device=device)[:num_mask]
+            mask_positions.append(positions)
+
+        return mask_positions
+
+    def _span_masking(self, batch_size, num_chunks, device):
+        """Span masking: mask consecutive spans of tokens."""
+        mask_positions = []
+        target_mask_count = max(1, int(num_chunks * self.mask_ratio))
+
+        for _ in range(batch_size):
+            masked = []
+            while len(masked) < target_mask_count:
+                # Random span length (Poisson distribution)
+                span_len = min(torch.poisson(torch.tensor([self.span_length])).int().item(), num_chunks)
+                span_len = max(1, span_len)
+
+                # Random start position
+                start = torch.randint(0, max(1, num_chunks - span_len + 1), (1,), device=device).item()
+                span = list(range(start, min(start + span_len, num_chunks)))
+
+                # Add span to masked positions
+                masked.extend(span)
+
+                # Avoid masking too many
+                if len(masked) >= target_mask_count:
+                    masked = masked[:target_mask_count]
+                    break
+
+            mask_positions.append(torch.tensor(masked, device=device, dtype=torch.long))
+
+        return mask_positions
+
+    def _block_masking(self, batch_size, num_chunks, device):
+        """Block masking: mask in a block pattern."""
+        mask_positions = []
+        target_mask_count = max(1, int(num_chunks * self.mask_ratio))
+
+        for _ in range(batch_size):
+            # Create contiguous block
+            start = torch.randint(0, max(1, num_chunks - target_mask_count + 1), (1,), device=device).item()
+            positions = torch.arange(start, min(start + target_mask_count, num_chunks), device=device)
+            mask_positions.append(positions)
+
+        return mask_positions
 
     def compute_loss(self, predictions, batch_dict):
         """
@@ -143,19 +207,24 @@ class CSMEmbedder(nn.Module):
         mask_positions = batch_dict['mask_positions']
         original_inputs = batch_dict['original_inputs']
 
-        # Extract predictions at masked positions
-        masked_predictions = torch.stack([
-            predictions[i, mask_positions[i]]
-            for i in range(batch_size)
-        ])  # (batch, dim)
+        # Extract predictions and targets at all masked positions
+        all_predictions = []
+        all_targets = []
 
-        # Extract original values at masked positions
-        masked_targets = torch.stack([
-            original_inputs[i, mask_positions[i]]
-            for i in range(batch_size)
-        ])  # (batch, in_dim)
+        for i in range(batch_size):
+            for pos in mask_positions[i]:
+                all_predictions.append(predictions[i, pos])
+                all_targets.append(original_inputs[i, pos])
 
-        # MSE loss
-        loss = F.mse_loss(masked_predictions, masked_targets)
+        # Stack into tensors
+        if len(all_predictions) > 0:
+            all_predictions = torch.stack(all_predictions)  # (total_masked, dim)
+            all_targets = torch.stack(all_targets)          # (total_masked, in_dim)
+
+            # MSE loss
+            loss = F.mse_loss(all_predictions, all_targets)
+        else:
+            # No masked positions (shouldn't happen)
+            loss = torch.tensor(0.0, device=predictions.device)
 
         return loss

@@ -181,7 +181,10 @@ def build_model(config):
         embed_dim=config['embed_dim'],
         dropout=config['dropout'],
         max_seq_len=config['num_chunks'],
-        pos_encoding_type=config.get('pos_encoding_type', 'learned')
+        pos_encoding_type=config.get('pos_encoding_type', 'learned'),
+        masking_strategy=config.get('masking_strategy', 'span'),
+        mask_ratio=config.get('mask_ratio', 0.15),
+        span_length=config.get('span_length', 3)
     )
 
     # Build decoder
