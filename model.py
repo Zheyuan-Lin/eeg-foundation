@@ -165,7 +165,9 @@ def build_model(config):
             pool_stride=config['pool_stride'],
             use_multiscale=config.get('use_multiscale', False),
             multiscale_kernels=config.get('multiscale_kernels', None),
-            use_attention_pooling=config.get('use_attention_pooling', False)
+            use_attention_pooling=config.get('use_attention_pooling', False),
+            use_channel_attention=config.get('use_channel_attention', False),
+            channel_attn_heads=config.get('channel_attn_heads', 4)
         )
         encoder = ChunkEncoder(base_encoder)
     else:

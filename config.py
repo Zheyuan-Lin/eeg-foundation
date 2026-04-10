@@ -38,6 +38,10 @@ def get_config():
         # Attention pooling
         'use_attention_pooling': True,  # Use attention pooling instead of average pooling
 
+        # Channel-wise attention
+        'use_channel_attention': True,  # Enable channel attention
+        'channel_attn_heads': 4,        # Number of attention heads for channel attention
+
         # Embedder
         'embed_dim': 256,          # Embedding dimension
         'parcellation_dim': None,  # Computed from encoder output

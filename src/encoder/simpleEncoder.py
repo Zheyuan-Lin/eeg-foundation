@@ -8,6 +8,55 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class ChannelAttention(nn.Module):
+    """
+    Self-attention across EEG channels.
+    Learns dependencies between different channels.
+
+    Args:
+        n_channels: Number of EEG channels
+        num_heads: Number of attention heads
+    """
+
+    def __init__(self, n_channels, num_heads=4):
+        super().__init__()
+
+        self.n_channels = n_channels
+        self.num_heads = num_heads
+
+        # Multi-head self-attention
+        self.attention = nn.MultiheadAttention(
+            embed_dim=n_channels,
+            num_heads=num_heads,
+            batch_first=True
+        )
+
+        # Layer normalization
+        self.layer_norm = nn.LayerNorm(n_channels)
+
+    def forward(self, x):
+        """
+        Apply channel attention.
+
+        Args:
+            x: (batch, channels, time)
+
+        Returns:
+            x: (batch, channels, time) with channel attention applied
+        """
+        # Transpose to (batch, time, channels) for attention
+        x_t = x.transpose(1, 2)
+
+        # Self-attention across channels
+        attn_out, _ = self.attention(x_t, x_t, x_t)
+
+        # Residual connection + layer norm
+        x_t = self.layer_norm(x_t + attn_out)
+
+        # Transpose back to (batch, channels, time)
+        return x_t.transpose(1, 2)
+
+
 class SimpleEncoder(nn.Module):
     """
     Basic encoder for EEG chunks.
@@ -34,7 +83,9 @@ class SimpleEncoder(nn.Module):
         pool_stride=15,
         use_multiscale=False,
         multiscale_kernels=None,
-        use_attention_pooling=False
+        use_attention_pooling=False,
+        use_channel_attention=False,
+        channel_attn_heads=4
     ):
         super().__init__()
 
@@ -42,6 +93,11 @@ class SimpleEncoder(nn.Module):
         self.chunk_len = chunk_len
         self.use_multiscale = use_multiscale
         self.use_attention_pooling = use_attention_pooling
+        self.use_channel_attention = use_channel_attention
+
+        # Channel attention (applied before convolutions)
+        if use_channel_attention:
+            self.channel_attn = ChannelAttention(n_channels, channel_attn_heads)
 
         if use_multiscale and multiscale_kernels:
             # Multi-scale temporal convolutions
@@ -110,6 +166,10 @@ class SimpleEncoder(nn.Module):
             attention_weights (optional): (batch, time'') if attention pooling enabled
         """
         # x: (batch, channels, time)
+
+        # Apply channel attention first
+        if self.use_channel_attention:
+            x = self.channel_attn(x)
 
         if self.use_multiscale:
             # Multi-scale convolutions: apply each branch and concatenate
