@@ -208,7 +208,10 @@ def build_model(config):
         max_seq_len=config['num_chunks'],
         output_dim=config['parcellation_dim'],  # Project back to input space
         use_relative_pos=config.get('use_relative_pos', False),
-        max_relative_distance=config.get('max_relative_distance', 32)
+        max_relative_distance=config.get('max_relative_distance', 32),
+        use_sparse_attention=config.get('use_sparse_attention', False),
+        local_window_size=config.get('local_window_size', 16),
+        global_tokens=config.get('global_tokens', 4)
     )
 
     # Build full model

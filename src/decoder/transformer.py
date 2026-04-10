@@ -63,7 +63,7 @@ class RelativePositionBias(nn.Module):
 
 class TransformerDecoder(nn.Module):
     """
-    Simple causal transformer decoder with optional relative positional encoding.
+    Simple causal transformer decoder with optional relative positional encoding and sparse attention.
 
     Args:
         embed_dim: Embedding dimension
@@ -75,6 +75,9 @@ class TransformerDecoder(nn.Module):
         output_dim: Output dimension (for reconstruction)
         use_relative_pos: Whether to use relative positional encoding
         max_relative_distance: Maximum relative distance for bias
+        use_sparse_attention: Whether to use sparse attention patterns
+        local_window_size: Window size for local attention
+        global_tokens: Number of global tokens for sparse attention
     """
 
     def __init__(
@@ -87,13 +90,19 @@ class TransformerDecoder(nn.Module):
         max_seq_len=512,
         output_dim=None,  # For reconstruction - typically parcellation_dim
         use_relative_pos=False,
-        max_relative_distance=32
+        max_relative_distance=32,
+        use_sparse_attention=False,
+        local_window_size=16,
+        global_tokens=4
     ):
         super().__init__()
 
         self.embed_dim = embed_dim
         self.output_dim = output_dim if output_dim is not None else embed_dim
         self.use_relative_pos = use_relative_pos
+        self.use_sparse_attention = use_sparse_attention
+        self.local_window_size = local_window_size
+        self.global_tokens = global_tokens
 
         # Positional encoding (only if not using relative)
         if not use_relative_pos:
@@ -136,9 +145,15 @@ class TransformerDecoder(nn.Module):
         if not self.use_relative_pos:
             x = self.pos_encoding(x)
 
-        # Create causal mask for transformer
+        # Create attention mask for transformer
         seq_len = x.size(1)
-        causal_mask = self._generate_square_subsequent_mask(seq_len).to(x.device)
+
+        if self.use_sparse_attention:
+            # Use sparse attention pattern (local + global)
+            causal_mask = self._generate_sparse_attention_mask(seq_len, x.device)
+        else:
+            # Standard causal mask
+            causal_mask = self._generate_square_subsequent_mask(seq_len).to(x.device)
 
         # Add relative positional bias if enabled
         if self.use_relative_pos:
@@ -172,6 +187,35 @@ class TransformerDecoder(nn.Module):
         """Generate causal mask (upper triangular)."""
         mask = torch.triu(torch.ones(sz, sz), diagonal=1)
         mask = mask.masked_fill(mask == 1, float('-inf'))
+        return mask
+
+    def _generate_sparse_attention_mask(self, seq_len, device):
+        """
+        Generate sparse attention mask with local + global pattern.
+
+        Combines:
+        - Local attention: attend to nearby tokens within a window
+        - Global attention: first few tokens can attend to all, and all can attend to them
+
+        Args:
+            seq_len: Sequence length
+            device: Device for the mask
+
+        Returns:
+            mask: (seq_len, seq_len) sparse attention mask
+        """
+        # Start with causal mask (can't attend to future)
+        mask = torch.triu(torch.ones(seq_len, seq_len, device=device), diagonal=1)
+        mask = mask.masked_fill(mask == 1, float('-inf'))
+
+        # Apply local window constraint (beyond global tokens)
+        for i in range(self.global_tokens, seq_len):
+            # Determine local window
+            start = max(self.global_tokens, i - self.local_window_size)
+            # Mask out tokens outside local window (but before current position)
+            if start > self.global_tokens:
+                mask[i, self.global_tokens:start] = float('-inf')
+
         return mask
 
 

@@ -64,6 +64,9 @@ def get_config():
         'dropout': 0.1,
         'use_relative_pos': True,  # Use relative positional encoding
         'max_relative_distance': 32,  # Maximum relative distance for attention bias
+        'use_sparse_attention': False,  # Use sparse attention (local + global)
+        'local_window_size': 16,   # Window size for local attention
+        'global_tokens': 4,        # Number of global attention tokens
 
         # Training
         'batch_size': 8,
