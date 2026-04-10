@@ -19,6 +19,8 @@ class SimpleEncoder(nn.Module):
         filter_len: Length of temporal filter
         pool_len: Pooling window size
         pool_stride: Pooling stride
+        use_multiscale: Whether to use multi-scale convolutions
+        multiscale_kernels: List of kernel sizes for multi-scale branches
     """
 
     def __init__(
@@ -28,23 +30,52 @@ class SimpleEncoder(nn.Module):
         n_filters=40,
         filter_len=25,
         pool_len=75,
-        pool_stride=15
+        pool_stride=15,
+        use_multiscale=False,
+        multiscale_kernels=None
     ):
         super().__init__()
 
         self.n_channels = n_channels
         self.chunk_len = chunk_len
+        self.use_multiscale = use_multiscale
 
-        # Temporal convolution
-        self.temporal_conv = nn.Conv1d(
-            in_channels=n_channels,
-            out_channels=n_filters,
-            kernel_size=filter_len,
-            bias=True
-        )
+        if use_multiscale and multiscale_kernels:
+            # Multi-scale temporal convolutions
+            self.conv_branches = nn.ModuleList([
+                nn.Conv1d(
+                    in_channels=n_channels,
+                    out_channels=n_filters,
+                    kernel_size=k,
+                    bias=True
+                ) for k in multiscale_kernels
+            ])
 
-        # Batch normalization
-        self.bn = nn.BatchNorm1d(n_filters)
+            # Batch normalization for each branch
+            self.bn_branches = nn.ModuleList([
+                nn.BatchNorm1d(n_filters) for _ in multiscale_kernels
+            ])
+
+            # Total filters after concatenation
+            total_filters = n_filters * len(multiscale_kernels)
+
+            # Use the smallest kernel to calculate output size
+            min_kernel = min(multiscale_kernels)
+            conv_out = chunk_len - min_kernel + 1
+        else:
+            # Single-scale temporal convolution
+            self.temporal_conv = nn.Conv1d(
+                in_channels=n_channels,
+                out_channels=n_filters,
+                kernel_size=filter_len,
+                bias=True
+            )
+
+            # Batch normalization
+            self.bn = nn.BatchNorm1d(n_filters)
+
+            total_filters = n_filters
+            conv_out = chunk_len - filter_len + 1
 
         # Activation
         self.activation = nn.ELU()
@@ -56,9 +87,8 @@ class SimpleEncoder(nn.Module):
         )
 
         # Calculate output dimension
-        conv_out = chunk_len - filter_len + 1
         pool_out = (conv_out - pool_len) // pool_stride + 1
-        self.output_dim = pool_out * n_filters
+        self.output_dim = pool_out * total_filters
 
     def forward(self, x):
         """
@@ -71,10 +101,38 @@ class SimpleEncoder(nn.Module):
             Feature vector of shape (batch, output_dim)
         """
         # x: (batch, channels, time)
-        x = self.temporal_conv(x)      # (batch, n_filters, time')
-        x = self.bn(x)
-        x = self.activation(x)
-        x = self.pool(x)                # (batch, n_filters, time'')
+
+        if self.use_multiscale:
+            # Multi-scale convolutions: apply each branch and concatenate
+            branch_outputs = []
+            min_time = None
+
+            for conv, bn in zip(self.conv_branches, self.bn_branches):
+                out = conv(x)  # (batch, n_filters, time')
+                out = bn(out)
+                out = self.activation(out)
+
+                # Track minimum time dimension
+                if min_time is None:
+                    min_time = out.size(2)
+                else:
+                    min_time = min(min_time, out.size(2))
+
+                branch_outputs.append(out)
+
+            # Align all branches to same time dimension (crop to minimum)
+            aligned_outputs = [out[:, :, :min_time] for out in branch_outputs]
+
+            # Concatenate along channel dimension
+            x = torch.cat(aligned_outputs, dim=1)  # (batch, total_filters, time')
+        else:
+            # Single-scale convolution
+            x = self.temporal_conv(x)      # (batch, n_filters, time')
+            x = self.bn(x)
+            x = self.activation(x)
+
+        # Pooling
+        x = self.pool(x)                # (batch, filters, time'')
 
         # Flatten
         x = x.reshape(x.size(0), -1)   # (batch, output_dim)

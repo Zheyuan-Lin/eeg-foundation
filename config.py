@@ -31,6 +31,10 @@ def get_config():
         'pool_len': 75,            # Pooling window
         'pool_stride': 15,         # Pooling stride
 
+        # Multi-scale temporal convolutions
+        'use_multiscale': True,    # Enable multi-scale convolutions
+        'multiscale_kernels': [15, 25, 35],  # Kernel sizes for multi-scale branches
+
         # Embedder
         'embed_dim': 256,          # Embedding dimension
         'parcellation_dim': None,  # Computed from encoder output
@@ -72,11 +76,20 @@ def update_config(config, **kwargs):
 
     # Compute parcellation_dim if encoder is used
     if config['use_encoder']:
-        # Formula from the full model
-        config['parcellation_dim'] = (
-            (config['chunk_len'] - config['filter_len'] + 1 - config['pool_len'])
-            // config['pool_stride'] + 1
-        ) * config['n_filters']
+        if config.get('use_multiscale', False) and config.get('multiscale_kernels'):
+            # Multi-scale: use minimum kernel size
+            min_kernel = min(config['multiscale_kernels'])
+            num_scales = len(config['multiscale_kernels'])
+            config['parcellation_dim'] = (
+                (config['chunk_len'] - min_kernel + 1 - config['pool_len'])
+                // config['pool_stride'] + 1
+            ) * config['n_filters'] * num_scales
+        else:
+            # Single-scale: original formula
+            config['parcellation_dim'] = (
+                (config['chunk_len'] - config['filter_len'] + 1 - config['pool_len'])
+                // config['pool_stride'] + 1
+            ) * config['n_filters']
     else:
         config['parcellation_dim'] = config['chunk_len'] * config['num_channels']
 

@@ -154,7 +154,7 @@ def build_model(config):
     """
     # Build encoder
     if config['use_encoder']:
-        from encoder.simple_encoder import SimpleEncoder, ChunkEncoder
+        from src.encoder.simpleEncoder import SimpleEncoder, ChunkEncoder
 
         base_encoder = SimpleEncoder(
             n_channels=config['num_channels'],
@@ -162,14 +162,16 @@ def build_model(config):
             n_filters=config['n_filters'],
             filter_len=config['filter_len'],
             pool_len=config['pool_len'],
-            pool_stride=config['pool_stride']
+            pool_stride=config['pool_stride'],
+            use_multiscale=config.get('use_multiscale', False),
+            multiscale_kernels=config.get('multiscale_kernels', None)
         )
         encoder = ChunkEncoder(base_encoder)
     else:
         encoder = None
 
     # Build embedder
-    from embedder.csm_embedder import CSMEmbedder
+    from src.embedding.embedder import CSMEmbedder
 
     embedder = CSMEmbedder(
         in_dim=config['parcellation_dim'],
@@ -178,7 +180,7 @@ def build_model(config):
     )
 
     # Build decoder
-    from decoder.transformer import TransformerDecoder
+    from src.decoder.transformer import TransformerDecoder
 
     decoder = TransformerDecoder(
         embed_dim=config['embed_dim'],
