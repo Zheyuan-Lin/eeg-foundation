@@ -29,7 +29,8 @@ class CSMEmbedder(nn.Module):
     """
 
     def __init__(self, in_dim, embed_dim, dropout=0.1, max_seq_len=512, pos_encoding_type='learned',
-                 masking_strategy='span', mask_ratio=0.15, span_length=3):
+                 masking_strategy='span', mask_ratio=0.15, span_length=3,
+                 use_contrastive_loss=False, contrastive_temperature=0.07, contrastive_weight=0.5):
         super().__init__()
 
         self.in_dim = in_dim
@@ -38,6 +39,9 @@ class CSMEmbedder(nn.Module):
         self.masking_strategy = masking_strategy
         self.mask_ratio = mask_ratio
         self.span_length = span_length
+        self.use_contrastive_loss = use_contrastive_loss
+        self.contrastive_temperature = contrastive_temperature
+        self.contrastive_weight = contrastive_weight
 
         # Projection layer
         self.projection = nn.Linear(in_dim, embed_dim)
@@ -53,6 +57,14 @@ class CSMEmbedder(nn.Module):
             # Sinusoidal positional encoding (fixed)
             self.register_buffer('pos_embedding', self._get_sinusoidal_encoding(max_seq_len, embed_dim))
         # else: no positional encoding
+
+        # Contrastive learning projection head
+        if use_contrastive_loss:
+            self.contrast_proj = nn.Sequential(
+                nn.Linear(embed_dim, embed_dim),
+                nn.ReLU(),
+                nn.Linear(embed_dim, embed_dim // 2)
+            )
 
         # Dropout
         self.dropout = nn.Dropout(dropout)
@@ -228,3 +240,87 @@ class CSMEmbedder(nn.Module):
             loss = torch.tensor(0.0, device=predictions.device)
 
         return loss
+
+    def compute_contrastive_loss(self, embeddings, batch_dict):
+        """
+        Compute contrastive loss using masked and unmasked representations.
+
+        Creates positive pairs from the same sequence and negative pairs from different sequences.
+
+        Args:
+            embeddings: Embedded representations (batch, num_chunks, embed_dim)
+            batch_dict: Dictionary from prepare_batch
+
+        Returns:
+            loss: Scalar contrastive loss
+        """
+        batch_size = embeddings.shape[0]
+        mask_positions = batch_dict['mask_positions']
+
+        # Extract representations at masked positions (anchors)
+        anchors = []
+        for i in range(batch_size):
+            if len(mask_positions[i]) > 0:
+                # Average over all masked positions for this sequence
+                masked_emb = embeddings[i, mask_positions[i]].mean(dim=0)
+                anchors.append(masked_emb)
+
+        if len(anchors) == 0:
+            return torch.tensor(0.0, device=embeddings.device)
+
+        anchors = torch.stack(anchors)  # (batch, embed_dim)
+
+        # Project to contrastive space
+        anchors = self.contrast_proj(anchors)  # (batch, embed_dim // 2)
+
+        # Normalize
+        anchors = F.normalize(anchors, dim=-1)
+
+        # Compute similarity matrix
+        similarity = torch.mm(anchors, anchors.t()) / self.contrastive_temperature  # (batch, batch)
+
+        # Labels: positives are on the diagonal (same sequence)
+        labels = torch.arange(batch_size, device=embeddings.device)
+
+        # Contrastive loss (InfoNCE)
+        loss = F.cross_entropy(similarity, labels)
+
+        return loss
+
+    def compute_combined_loss(self, predictions, embeddings, batch_dict):
+        """
+        Compute combined reconstruction and contrastive loss.
+
+        Args:
+            predictions: Model outputs (batch, num_chunks, in_dim)
+            embeddings: Embedded representations (batch, num_chunks, embed_dim)
+            batch_dict: Dictionary from prepare_batch
+
+        Returns:
+            loss: Combined loss
+            loss_dict: Dictionary with individual losses
+        """
+        # Reconstruction loss
+        recon_loss = self.compute_loss(predictions, batch_dict)
+
+        if self.use_contrastive_loss:
+            # Contrastive loss
+            contrast_loss = self.compute_contrastive_loss(embeddings, batch_dict)
+
+            # Weighted combination
+            total_loss = (1 - self.contrastive_weight) * recon_loss + \
+                         self.contrastive_weight * contrast_loss
+
+            loss_dict = {
+                'total': total_loss,
+                'reconstruction': recon_loss,
+                'contrastive': contrast_loss
+            }
+        else:
+            total_loss = recon_loss
+            loss_dict = {
+                'total': total_loss,
+                'reconstruction': recon_loss
+            }
+
+        return total_loss, loss_dict

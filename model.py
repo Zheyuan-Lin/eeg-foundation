@@ -60,21 +60,27 @@ class FoundationModel(nn.Module):
         else:
             return outputs
 
-    def compute_loss(self, x):
+    def compute_loss(self, x, return_loss_dict=False):
         """
-        Compute CSM training loss.
+        Compute CSM training loss (reconstruction + optional contrastive).
 
         Args:
             x: Raw EEG chunks
+            return_loss_dict: If True, return dictionary with individual losses
 
         Returns:
-            loss: Scalar tensor
+            loss: Scalar tensor (or dict if return_loss_dict=True)
         """
         # Forward pass with batch dict
-        outputs, _, batch_dict = self.forward(x, return_embeddings=True)
+        outputs, embeddings, batch_dict = self.forward(x, return_embeddings=True)
 
         # Compute loss at masked positions
-        loss = self.embedder.compute_loss(outputs, batch_dict)
+        if self.embedder.use_contrastive_loss:
+            loss, loss_dict = self.embedder.compute_combined_loss(outputs, embeddings, batch_dict)
+            if return_loss_dict:
+                return loss_dict
+        else:
+            loss = self.embedder.compute_loss(outputs, batch_dict)
 
         return loss
 
@@ -184,7 +190,10 @@ def build_model(config):
         pos_encoding_type=config.get('pos_encoding_type', 'learned'),
         masking_strategy=config.get('masking_strategy', 'span'),
         mask_ratio=config.get('mask_ratio', 0.15),
-        span_length=config.get('span_length', 3)
+        span_length=config.get('span_length', 3),
+        use_contrastive_loss=config.get('use_contrastive_loss', False),
+        contrastive_temperature=config.get('contrastive_temperature', 0.07),
+        contrastive_weight=config.get('contrastive_weight', 0.5)
     )
 
     # Build decoder

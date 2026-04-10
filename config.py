@@ -52,6 +52,11 @@ def get_config():
         'mask_ratio': 0.15,          # Fraction of positions to mask
         'span_length': 3,            # Average span length for span masking
 
+        # Contrastive learning
+        'use_contrastive_loss': True,  # Enable contrastive learning
+        'contrastive_temperature': 0.07,  # Temperature for contrastive loss
+        'contrastive_weight': 0.5,     # Weight for contrastive loss (vs reconstruction)
+
         # Decoder (Transformer)
         'num_layers': 4,           # Number of transformer layers
         'num_heads': 4,            # Attention heads
