@@ -45,6 +45,7 @@ def get_config():
         # Embedder
         'embed_dim': 256,          # Embedding dimension
         'parcellation_dim': None,  # Computed from encoder output
+        'pos_encoding_type': 'learned',  # Options: 'learned', 'sinusoidal', 'none'
 
         # Decoder (Transformer)
         'num_layers': 4,           # Number of transformer layers

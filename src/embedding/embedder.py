@@ -6,6 +6,7 @@ Handles masking strategy and loss computation for pretraining.
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 
 class CSMEmbedder(nn.Module):
@@ -14,21 +15,25 @@ class CSMEmbedder(nn.Module):
 
     Responsibilities:
     1. Project chunks to embedding dimension
-    2. Add learnable mask token
-    3. Implement CSM masking strategy
-    4. Compute reconstruction loss
+    2. Add positional encodings (learned or sinusoidal)
+    3. Add learnable mask token
+    4. Implement CSM masking strategy
+    5. Compute reconstruction loss
 
     Args:
         in_dim: Input dimension (parcellation_dim)
         embed_dim: Embedding dimension
         dropout: Dropout rate
+        max_seq_len: Maximum sequence length
+        pos_encoding_type: Type of positional encoding ('learned', 'sinusoidal', 'none')
     """
 
-    def __init__(self, in_dim, embed_dim, dropout=0.1):
+    def __init__(self, in_dim, embed_dim, dropout=0.1, max_seq_len=512, pos_encoding_type='learned'):
         super().__init__()
 
         self.in_dim = in_dim
         self.embed_dim = embed_dim
+        self.pos_encoding_type = pos_encoding_type
 
         # Projection layer
         self.projection = nn.Linear(in_dim, embed_dim)
@@ -36,12 +41,31 @@ class CSMEmbedder(nn.Module):
         # Learnable mask token
         self.mask_token = nn.Parameter(torch.randn(1, 1, in_dim))
 
+        # Positional encoding
+        if pos_encoding_type == 'learned':
+            # Learnable positional embeddings
+            self.pos_embedding = nn.Parameter(torch.randn(1, max_seq_len, embed_dim))
+        elif pos_encoding_type == 'sinusoidal':
+            # Sinusoidal positional encoding (fixed)
+            self.register_buffer('pos_embedding', self._get_sinusoidal_encoding(max_seq_len, embed_dim))
+        # else: no positional encoding
+
         # Dropout
         self.dropout = nn.Dropout(dropout)
 
+    def _get_sinusoidal_encoding(self, max_len, d_model):
+        """Generate sinusoidal positional encoding."""
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe.unsqueeze(0)  # (1, max_len, d_model)
+
     def forward(self, x):
         """
-        Project inputs to embedding space.
+        Project inputs to embedding space with positional encoding.
 
         Args:
             x: (batch, num_chunks, in_dim)
@@ -49,7 +73,14 @@ class CSMEmbedder(nn.Module):
         Returns:
             (batch, num_chunks, embed_dim)
         """
+        # Project to embedding dimension
         x = self.projection(x)
+
+        # Add positional encoding
+        if self.pos_encoding_type != 'none':
+            seq_len = x.size(1)
+            x = x + self.pos_embedding[:, :seq_len, :]
+
         x = self.dropout(x)
         return x
 

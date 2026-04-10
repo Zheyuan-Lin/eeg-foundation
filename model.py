@@ -179,7 +179,9 @@ def build_model(config):
     embedder = CSMEmbedder(
         in_dim=config['parcellation_dim'],
         embed_dim=config['embed_dim'],
-        dropout=config['dropout']
+        dropout=config['dropout'],
+        max_seq_len=config['num_chunks'],
+        pos_encoding_type=config.get('pos_encoding_type', 'learned')
     )
 
     # Build decoder
