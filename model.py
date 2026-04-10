@@ -206,7 +206,9 @@ def build_model(config):
         ff_dim=config['ff_dim'],
         dropout=config['dropout'],
         max_seq_len=config['num_chunks'],
-        output_dim=config['parcellation_dim']  # Project back to input space
+        output_dim=config['parcellation_dim'],  # Project back to input space
+        use_relative_pos=config.get('use_relative_pos', False),
+        max_relative_distance=config.get('max_relative_distance', 32)
     )
 
     # Build full model

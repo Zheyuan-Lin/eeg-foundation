@@ -62,6 +62,8 @@ def get_config():
         'num_heads': 4,            # Attention heads
         'ff_dim': 1024,            # Feed-forward dimension
         'dropout': 0.1,
+        'use_relative_pos': True,  # Use relative positional encoding
+        'max_relative_distance': 32,  # Maximum relative distance for attention bias
 
         # Training
         'batch_size': 8,

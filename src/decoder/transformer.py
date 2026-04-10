@@ -8,9 +8,62 @@ import torch.nn as nn
 import math
 
 
+class RelativePositionBias(nn.Module):
+    """
+    Relative positional bias for transformer attention.
+
+    Args:
+        num_heads: Number of attention heads
+        max_distance: Maximum relative distance
+    """
+
+    def __init__(self, num_heads, max_distance=32):
+        super().__init__()
+
+        self.num_heads = num_heads
+        self.max_distance = max_distance
+
+        # Learnable relative position bias
+        # +1 for distances beyond max_distance
+        self.relative_bias = nn.Parameter(
+            torch.randn(num_heads, 2 * max_distance + 1)
+        )
+
+    def forward(self, seq_len):
+        """
+        Compute relative position bias.
+
+        Args:
+            seq_len: Sequence length
+
+        Returns:
+            bias: (num_heads, seq_len, seq_len) relative position bias
+        """
+        # Create position indices
+        positions = torch.arange(seq_len, device=self.relative_bias.device)
+
+        # Compute relative positions: (seq_len, seq_len)
+        relative_positions = positions.unsqueeze(0) - positions.unsqueeze(1)
+
+        # Clip to max distance
+        clipped_positions = torch.clamp(
+            relative_positions,
+            -self.max_distance,
+            self.max_distance
+        )
+
+        # Shift to positive indices
+        bias_indices = clipped_positions + self.max_distance
+
+        # Get bias values: (seq_len, seq_len, num_heads)
+        bias = self.relative_bias[:, bias_indices]  # (num_heads, seq_len, seq_len)
+
+        return bias
+
+
 class TransformerDecoder(nn.Module):
     """
-    Simple causal transformer decoder.
+    Simple causal transformer decoder with optional relative positional encoding.
 
     Args:
         embed_dim: Embedding dimension
@@ -19,6 +72,9 @@ class TransformerDecoder(nn.Module):
         ff_dim: Feed-forward dimension
         dropout: Dropout rate
         max_seq_len: Maximum sequence length
+        output_dim: Output dimension (for reconstruction)
+        use_relative_pos: Whether to use relative positional encoding
+        max_relative_distance: Maximum relative distance for bias
     """
 
     def __init__(
@@ -29,15 +85,23 @@ class TransformerDecoder(nn.Module):
         ff_dim=1024,
         dropout=0.1,
         max_seq_len=512,
-        output_dim=None  # For reconstruction - typically parcellation_dim
+        output_dim=None,  # For reconstruction - typically parcellation_dim
+        use_relative_pos=False,
+        max_relative_distance=32
     ):
         super().__init__()
 
         self.embed_dim = embed_dim
         self.output_dim = output_dim if output_dim is not None else embed_dim
+        self.use_relative_pos = use_relative_pos
 
-        # Positional encoding
-        self.pos_encoding = PositionalEncoding(embed_dim, max_seq_len, dropout)
+        # Positional encoding (only if not using relative)
+        if not use_relative_pos:
+            self.pos_encoding = PositionalEncoding(embed_dim, max_seq_len, dropout)
+
+        # Relative positional bias
+        if use_relative_pos:
+            self.relative_pos_bias = RelativePositionBias(num_heads, max_relative_distance)
 
         # Transformer layers
         encoder_layer = nn.TransformerEncoderLayer(
@@ -68,12 +132,21 @@ class TransformerDecoder(nn.Module):
         Returns:
             (batch, seq_len, embed_dim)
         """
-        # Add positional encoding
-        x = self.pos_encoding(x)
+        # Add positional encoding (if not using relative)
+        if not self.use_relative_pos:
+            x = self.pos_encoding(x)
 
         # Create causal mask for transformer
         seq_len = x.size(1)
         causal_mask = self._generate_square_subsequent_mask(seq_len).to(x.device)
+
+        # Add relative positional bias if enabled
+        if self.use_relative_pos:
+            rel_bias = self.relative_pos_bias(seq_len)  # (num_heads, seq_len, seq_len)
+            # Add bias to causal mask (broadcast over batch and heads)
+            # Note: This is a simplified version; for full integration, would need
+            # custom attention layers. Here we add it to the mask.
+            causal_mask = causal_mask + rel_bias.mean(0)  # Average over heads for simplicity
 
         # Convert attention_mask to format expected by transformer
         # attention_mask: (batch, seq_len) -> src_key_padding_mask
