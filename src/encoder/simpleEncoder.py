@@ -5,6 +5,7 @@ Processes raw EEG chunks into feature vectors.
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class SimpleEncoder(nn.Module):
@@ -32,13 +33,15 @@ class SimpleEncoder(nn.Module):
         pool_len=75,
         pool_stride=15,
         use_multiscale=False,
-        multiscale_kernels=None
+        multiscale_kernels=None,
+        use_attention_pooling=False
     ):
         super().__init__()
 
         self.n_channels = n_channels
         self.chunk_len = chunk_len
         self.use_multiscale = use_multiscale
+        self.use_attention_pooling = use_attention_pooling
 
         if use_multiscale and multiscale_kernels:
             # Multi-scale temporal convolutions
@@ -81,24 +84,30 @@ class SimpleEncoder(nn.Module):
         self.activation = nn.ELU()
 
         # Temporal pooling
-        self.pool = nn.AvgPool1d(
-            kernel_size=pool_len,
-            stride=pool_stride
-        )
+        if use_attention_pooling:
+            # After conv, before pooling
+            pool_out = (conv_out - pool_len) // pool_stride + 1
+            self.pool = nn.AvgPool1d(kernel_size=pool_len, stride=pool_stride)
+            # Attention pooling over pooled features
+            self.attention_pool = AttentionPooling(total_filters)
+            self.output_dim = total_filters  # Single vector per chunk
+        else:
+            # Standard average pooling
+            self.pool = nn.AvgPool1d(kernel_size=pool_len, stride=pool_stride)
+            pool_out = (conv_out - pool_len) // pool_stride + 1
+            self.output_dim = pool_out * total_filters
 
-        # Calculate output dimension
-        pool_out = (conv_out - pool_len) // pool_stride + 1
-        self.output_dim = pool_out * total_filters
-
-    def forward(self, x):
+    def forward(self, x, return_attention=False):
         """
         Forward pass.
 
         Args:
             x: Input tensor of shape (batch, channels, time)
+            return_attention: If True, return attention weights (only for attention pooling)
 
         Returns:
             Feature vector of shape (batch, output_dim)
+            attention_weights (optional): (batch, time'') if attention pooling enabled
         """
         # x: (batch, channels, time)
 
@@ -134,10 +143,63 @@ class SimpleEncoder(nn.Module):
         # Pooling
         x = self.pool(x)                # (batch, filters, time'')
 
-        # Flatten
-        x = x.reshape(x.size(0), -1)   # (batch, output_dim)
+        if self.use_attention_pooling:
+            # Apply attention pooling
+            x, attn_weights = self.attention_pool(x)  # (batch, filters), (batch, time'')
+
+            if return_attention:
+                return x, attn_weights
+        else:
+            # Flatten
+            x = x.reshape(x.size(0), -1)   # (batch, output_dim)
 
         return x
+
+
+class AttentionPooling(nn.Module):
+    """
+    Learned attention pooling layer.
+    Computes attention weights over temporal dimension and pools accordingly.
+
+    Args:
+        input_dim: Number of input channels/filters
+    """
+
+    def __init__(self, input_dim):
+        super().__init__()
+
+        # Attention mechanism: learn importance of each time step
+        self.attention = nn.Sequential(
+            nn.Linear(input_dim, input_dim // 2),
+            nn.Tanh(),
+            nn.Linear(input_dim // 2, 1)
+        )
+
+    def forward(self, x):
+        """
+        Apply attention pooling.
+
+        Args:
+            x: (batch, channels, time)
+
+        Returns:
+            pooled: (batch, channels)
+            attention_weights: (batch, time) - for visualization
+        """
+        # Transpose to (batch, time, channels)
+        x_t = x.transpose(1, 2)
+
+        # Compute attention scores: (batch, time, 1)
+        attn_scores = self.attention(x_t)
+
+        # Normalize to weights: (batch, time, 1)
+        attn_weights = F.softmax(attn_scores, dim=1)
+
+        # Weighted sum: (batch, channels)
+        pooled = torch.sum(x_t * attn_weights, dim=1)
+
+        # Return weights for visualization (squeeze last dim)
+        return pooled, attn_weights.squeeze(-1)
 
 
 class ChunkEncoder(nn.Module):

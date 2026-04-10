@@ -35,6 +35,9 @@ def get_config():
         'use_multiscale': True,    # Enable multi-scale convolutions
         'multiscale_kernels': [15, 25, 35],  # Kernel sizes for multi-scale branches
 
+        # Attention pooling
+        'use_attention_pooling': True,  # Use attention pooling instead of average pooling
+
         # Embedder
         'embed_dim': 256,          # Embedding dimension
         'parcellation_dim': None,  # Computed from encoder output
@@ -76,7 +79,14 @@ def update_config(config, **kwargs):
 
     # Compute parcellation_dim if encoder is used
     if config['use_encoder']:
-        if config.get('use_multiscale', False) and config.get('multiscale_kernels'):
+        if config.get('use_attention_pooling', False):
+            # Attention pooling: outputs single vector per chunk
+            if config.get('use_multiscale', False) and config.get('multiscale_kernels'):
+                num_scales = len(config['multiscale_kernels'])
+                config['parcellation_dim'] = config['n_filters'] * num_scales
+            else:
+                config['parcellation_dim'] = config['n_filters']
+        elif config.get('use_multiscale', False) and config.get('multiscale_kernels'):
             # Multi-scale: use minimum kernel size
             min_kernel = min(config['multiscale_kernels'])
             num_scales = len(config['multiscale_kernels'])
